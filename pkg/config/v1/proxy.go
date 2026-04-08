@@ -273,7 +273,8 @@ var _ ProxyConfigurer = &UDPProxyConfig{}
 type UDPProxyConfig struct {
 	ProxyBaseConfig
 
-	RemotePort int `json:"remotePort,omitempty"`
+	RemotePort int    `json:"remotePort,omitempty"`
+	XorKey     string `json:"xorKey,omitempty"`
 }
 
 func (c *UDPProxyConfig) MarshalToMsg(m *msg.NewProxy) {

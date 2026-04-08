@@ -90,7 +90,11 @@ func (pxy *UDPProxy) Close() {
 
 func (pxy *UDPProxy) InWorkConn(conn net.Conn, _ *msg.StartWorkConn) {
 	xl := pxy.xl
-	xl.Infof("incoming a new work connection for udp proxy, %s", conn.RemoteAddr().String())
+	xl.Infof(
+		"incoming a new work connection for udp proxy, %s, xor key: %s",
+		conn.RemoteAddr().String(),
+		pxy.cfg.XorKey,
+	)
 	// close resources related with old workConn
 	pxy.Close()
 
@@ -173,5 +177,5 @@ func (pxy *UDPProxy) InWorkConn(conn net.Conn, _ *msg.StartWorkConn) {
 	go heartbeatFn(pxy.sendCh)
 
 	// Call Forwarder with proxy protocol version (empty string means no proxy protocol)
-	udp.Forwarder(pxy.localAddr, pxy.readCh, pxy.sendCh, int(pxy.clientCfg.UDPPacketSize), pxy.cfg.Transport.ProxyProtocolVersion)
+	udp.Forwarder(pxy.localAddr, pxy.readCh, pxy.sendCh, int(pxy.clientCfg.UDPPacketSize), pxy.cfg.Transport.ProxyProtocolVersion, pxy.cfg.XorKey)
 }

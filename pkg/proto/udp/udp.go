@@ -15,6 +15,8 @@
 package udp
 
 import (
+	"bytes"
+	"crypto/md5"
 	"encoding/base64"
 	"net"
 	"sync"
@@ -70,9 +72,30 @@ func ForwardUserConn(udpConn *net.UDPConn, readCh <-chan *msg.UDPPacket, sendCh 
 	}
 }
 
-func Forwarder(dstAddr *net.UDPAddr, readCh <-chan *msg.UDPPacket, sendCh chan<- msg.Message, bufSize int, proxyProtocolVersion string) {
+func Forwarder(dstAddr *net.UDPAddr, readCh <-chan *msg.UDPPacket, sendCh chan<- msg.Message, bufSize int, proxyProtocolVersion string, args ...string) {
 	var mu sync.RWMutex
 	udpConnMap := make(map[string]*net.UDPConn)
+
+	var xorKey bytes.Buffer
+
+	for _, arg := range args {
+		if "" != arg {
+			key := md5.Sum([]byte(arg))
+			xorKey.Write(key[:])
+			break
+		}
+	}
+
+	xorLen := xorKey.Len()
+	xorData := func(data []byte, n int) []byte {
+		if 0 < n && 0 < xorLen {
+			key := xorKey.Bytes()
+			for i := 0; n > i; i++ {
+				data[i] ^= key[i%xorLen]
+			}
+		}
+		return data[:n]
+	}
 
 	// read from dstAddr and write to sendCh
 	writerFn := func(raddr *net.UDPAddr, udpConn *net.UDPConn) {
@@ -92,7 +115,7 @@ func Forwarder(dstAddr *net.UDPAddr, readCh <-chan *msg.UDPPacket, sendCh chan<-
 				return
 			}
 
-			udpMsg := NewUDPPacket(buf[:n], nil, raddr)
+			udpMsg := NewUDPPacket(xorData(buf, n), nil, raddr)
 			if err = errors.PanicToError(func() {
 				select {
 				case sendCh <- udpMsg:
@@ -123,6 +146,8 @@ func Forwarder(dstAddr *net.UDPAddr, readCh <-chan *msg.UDPPacket, sendCh chan<-
 				udpConnMap[udpMsg.RemoteAddr.String()] = udpConn
 			}
 			mu.Unlock()
+
+			buf = xorData(buf, len(buf))
 
 			// Add proxy protocol header if configured
 			if proxyProtocolVersion != "" && udpMsg.RemoteAddr != nil {
