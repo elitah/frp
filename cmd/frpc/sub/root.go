@@ -16,10 +16,8 @@ package sub
 
 import (
 	"context"
-	"crypto/md5"
 	"fmt"
 	"io/fs"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,9 +37,7 @@ import (
 )
 
 var (
-	xorToken         string
-	xorListenPort    int
-	xorAddress       string
+	xorFile          string
 	cfgFile          string
 	cfgDir           string
 	showVersion      bool
@@ -49,9 +45,7 @@ var (
 )
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&xorToken, "xor_token", "x", "", "token for XOR encryption")
-	rootCmd.PersistentFlags().IntVarP(&xorListenPort, "xor_listen_port", "p", 0, "listen port for XOR encryption")
-	rootCmd.PersistentFlags().StringVarP(&xorAddress, "xor_address", "a", "", "address for XOR encryption")
+	rootCmd.PersistentFlags().StringVarP(&xorFile, "xor_file", "x", "", "file path for XOR forward")
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "./frpc.ini", "config file of frpc")
 	rootCmd.PersistentFlags().StringVarP(&cfgDir, "config_dir", "", "", "config directory, run one frpc service for each file in config directory")
 	rootCmd.PersistentFlags().BoolVarP(&showVersion, "version", "v", false, "version of frpc")
@@ -62,94 +56,19 @@ var rootCmd = &cobra.Command{
 	Use:   "frpc",
 	Short: "frpc is the client of frp (https://github.com/fatedier/frp)",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		var wg sync.WaitGroup
+
+		defer ForwardExit(&wg)
+
 		if showVersion {
 			fmt.Println(version.Full())
 			return nil
 		}
 
-		if "" != xorToken {
-			if "" == xorAddress {
-				fmt.Println("XOR token provided without XOR address, exiting!!!")
-				return nil
-			}
-			remote, err := net.ResolveUDPAddr("udp", xorAddress)
-			if nil != err {
-				fmt.Printf("invalid XOR address provided: error: %v\n", err)
-				return nil
-			}
-			if 0 >= xorListenPort || 65535 < xorListenPort {
-				xorListenPort = remote.Port
-			}
-			if connLocal, err := net.ListenUDP("udp", &net.UDPAddr{
-				Port: xorListenPort,
-			}); nil == err {
-				var clients sync.Map
-				defer connLocal.Close()
-				xorKey := md5.Sum([]byte(xorToken))
-				xorLen := len(xorKey)
-				xorData := func(data []byte, n int) []byte {
-					for i := 0; n > i; i++ {
-						data[i] ^= xorKey[i%xorLen]
-					}
-					return data[:n]
-				}
-				clientHandler := func(connRemote *net.UDPConn, addr *net.UDPAddr) {
-					defer func() {
-						clients.Delete(addr.String())
-						connRemote.Close()
-					}()
-					buffer := make([]byte, 64*1024)
-					for {
-						connRemote.SetReadDeadline(time.Now().Add(5 * time.Minute))
-						if n, err := connRemote.Read(buffer); nil == err {
-							if _, err = connLocal.WriteTo(xorData(buffer, n), addr); nil != err {
-								fmt.Printf("failed to write to UDP connection, error: %v\n", err)
-								return
-							}
-						} else {
-							fmt.Printf("failed to read from UDP connection, error: %v\n", err)
-							return
-						}
-					}
-				}
-				clientWriter := func(addr *net.UDPAddr, data []byte, n int) {
-					var conn *net.UDPConn
-					if c, ok := clients.Load(addr.String()); ok {
-						if _conn, ok := c.(*net.UDPConn); ok {
-							conn = _conn
-						} else {
-							fmt.Printf("invalid connection type for %s\n", addr.String())
-							return
-						}
-					} else {
-						if _conn, err := net.DialUDP("udp", nil, remote); nil == err {
-							fmt.Printf("new XOR connection from %s\n", addr.String())
-							clients.Store(addr.String(), _conn)
-							go clientHandler(_conn, addr)
-							conn = _conn
-						} else {
-							fmt.Printf("failed to connect to XOR address, error: %v\n", err)
-							return
-						}
-					}
-					if _, err := conn.Write(xorData(data, n)); nil != err {
-						fmt.Printf("failed to write to UDP connection, error: %v\n", err)
-						clients.Delete(addr.String())
-						conn.Close()
-					}
-				}
-				buffer := make([]byte, 64*1024)
-				fmt.Printf("XOR encryption enabled, listening on UDP port %d, forwarding to %s\n", xorListenPort, xorAddress)
-				for {
-					if n, addr, err := connLocal.ReadFromUDP(buffer); nil == err {
-						clientWriter(addr, buffer, n)
-					} else {
-						fmt.Printf("failed to read from UDP connection, error: %v\n", err)
-						return nil
-					}
-				}
-			} else {
-				fmt.Printf("failed to listen on UDP port %d, error: %v\n", xorListenPort, err)
+		if "" != xorFile {
+			if err := ForwardInit(&wg, xorFile); nil != err {
+				fmt.Println(err)
+				os.Exit(1)
 				return nil
 			}
 		}
@@ -165,6 +84,7 @@ var rootCmd = &cobra.Command{
 		err := runClient(cfgFile)
 		if err != nil {
 			fmt.Println(err)
+			ForwardExit(&wg, true)
 			os.Exit(1)
 		}
 		return nil
