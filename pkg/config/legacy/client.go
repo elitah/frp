@@ -51,6 +51,18 @@ type ClientCommonConf struct {
 	// By default, this value is empty.
 	// this value only use in TCP/Websocket protocol. Not support in KCP protocol.
 	ConnectServerLocalIP string `ini:"connect_server_local_ip" json:"connect_server_local_ip"`
+	// OnlyIPv4 specifies whether to use only IPv4 when connecting to the server.
+	// By default, this value is false, which means both IPv4 and IPv6 will be used.
+	// If this value is true, only IPv4 will be used.
+	// Note that if the server address resolves to both IPv4 and IPv6 addresses,
+	// setting this value to true may help avoid connection issues in some environments.
+	OnlyIPv4 bool `ini:"only_ipv4" json:"only_ipv4"`
+	// OnlyIPv6 specifies whether to use only IPv6 when connecting to the server.
+	// By default, this value is false, which means both IPv4 and IPv6 will be used.
+	// If this value is true, only IPv6 will be used.
+	// Note that if the server address resolves to both IPv4 and IPv6 addresses,
+	// setting this value to true may help avoid connection issues in some environments.
+	OnlyIPv6 bool `ini:"only_ipv6" json:"only_ipv6"`
 	// HTTPProxy specifies a proxy address to connect to the server through. If
 	// this value is "", the server will be connected to directly. By default,
 	// this value is read from the "http_proxy" environment variable.

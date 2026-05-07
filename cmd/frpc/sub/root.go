@@ -27,6 +27,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/samber/lo"
+
 	"github.com/fatedier/frp/client"
 	"github.com/fatedier/frp/pkg/config"
 	v1 "github.com/fatedier/frp/pkg/config/v1"
@@ -164,6 +166,17 @@ func startService(
 		log.Infof("start frpc service for config file [%s]", cfgFile)
 		defer log.Infof("frpc service for config file [%s] stopped", cfgFile)
 	}
+
+	if "" == cfg.Transport.ProxyURL {
+		if lo.FromPtr(cfg.Transport.OnlyIPv4) {
+			cfg.Transport.ProxyURL = StartHTTPProxy()
+			log.Infof("start frpc service with ipv4 proxy [%s]", cfg.Transport.ProxyURL)
+		} else if lo.FromPtr(cfg.Transport.OnlyIPv6) {
+			cfg.Transport.ProxyURL = StartHTTPProxy(true)
+			log.Infof("start frpc service with ipv6 proxy [%s]", cfg.Transport.ProxyURL)
+		}
+	}
+
 	svr, err := client.NewService(client.ServiceOptions{
 		Common:         cfg,
 		ProxyCfgs:      proxyCfgs,

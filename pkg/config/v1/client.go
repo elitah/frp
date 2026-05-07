@@ -109,6 +109,18 @@ type ClientTransportConfig struct {
 	// ConnectServerLocalIP specifies the address of the client bind when it connect to server.
 	// Note: This value only use in TCP/Websocket protocol. Not support in KCP protocol.
 	ConnectServerLocalIP string `json:"connectServerLocalIP,omitempty"`
+	// OnlyIPv4 specifies whether to use only IPv4 when connecting to the server.
+	// By default, this value is false, which means both IPv4 and IPv6 will be used.
+	// If this value is true, only IPv4 will be used.
+	// Note that if the server address resolves to both IPv4 and IPv6 addresses,
+	// setting this value to true may help avoid connection issues in some environments.
+	OnlyIPv4 *bool `json:"onlyIPv4,omitempty"`
+	// OnlyIPv6 specifies whether to use only IPv6 when connecting to the server.
+	// By default, this value is false, which means both IPv4 and IPv6 will be used.
+	// If this value is true, only IPv6 will be used.
+	// Note that if the server address resolves to both IPv4 and IPv6 addresses,
+	// setting this value to true may help avoid connection issues in some environments.
+	OnlyIPv6 *bool `json:"onlyIPv6,omitempty"`
 	// ProxyURL specifies a proxy address to connect to the server through. If
 	// this value is "", the server will be connected to directly. By default,
 	// this value is read from the "http_proxy" environment variable.
@@ -142,6 +154,7 @@ func (c *ClientTransportConfig) Complete() {
 	c.Protocol = util.EmptyOr(c.Protocol, "tcp")
 	c.DialServerTimeout = util.EmptyOr(c.DialServerTimeout, 10)
 	c.DialServerKeepAlive = util.EmptyOr(c.DialServerKeepAlive, 7200)
+	c.OnlyIPv4 = util.EmptyOr(c.OnlyIPv4, lo.ToPtr(false))
 	c.ProxyURL = util.EmptyOr(c.ProxyURL, os.Getenv("http_proxy"))
 	c.PoolCount = util.EmptyOr(c.PoolCount, 1)
 	c.TCPMux = util.EmptyOr(c.TCPMux, lo.ToPtr(true))
