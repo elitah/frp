@@ -32,23 +32,6 @@ import (
 	"github.com/fatedier/frp/pkg/util/log"
 )
 
-var (
-	gMutex      sync.RWMutex
-	gProxyURLV4 string
-	gProxyURLV6 string
-	gListenerV4 net.Listener
-	gListenerV6 net.Listener
-
-	gGuideOnce   sync.Once
-	gGuideAddr   string
-	gGuideNet    string
-	gGuideCancel context.CancelFunc
-
-	gMaxCompatible bool
-
-	gFetchFlags uint32
-)
-
 type ServerInfo struct {
 	Address  string `json:"address"`
 	OnlyIPv4 bool   `json:"only_ipv4"`
@@ -56,27 +39,45 @@ type ServerInfo struct {
 	TTL      int    `json:"ttl"`
 }
 
-func SetGuideURL(guideURL string) bool {
+type NetProxy struct {
+	mutex       sync.RWMutex
+	proxyURLV4  string
+	proxyURLV6  string
+	listenerV4  net.Listener
+	listenerV6  net.Listener
+	guideOnce   sync.Once
+	guideAddr   string
+	guideNet    string
+	guideCancel context.CancelFunc
+	maxCompat   bool
+	fetchFlags  uint32
+}
+
+func NewNetProxy() *NetProxy {
+	return &NetProxy{}
+}
+
+func (np *NetProxy) SetGuideURL(guideURL string) bool {
 	if _, err := url.Parse(guideURL); nil != err {
 		log.Warnf("[HTTP Proxy] invalid guide URL: %v", err)
 		return false
 	}
 
-	gGuideOnce.Do(func() {
+	np.guideOnce.Do(func() {
 		var ctx context.Context
-		ctx, gGuideCancel = context.WithCancel(context.Background())
+		ctx, np.guideCancel = context.WithCancel(context.Background())
 
-		atomic.StoreUint32(&gFetchFlags, 0x2)
+		atomic.StoreUint32(&np.fetchFlags, 0x2)
 
 		go func() {
-			interval := fetchServers(guideURL)
+			interval := np.fetchServers(guideURL)
 			timer := time.NewTimer(interval)
 			defer timer.Stop()
 
 			for {
 				select {
 				case <-timer.C:
-					interval = fetchServers(guideURL)
+					interval = np.fetchServers(guideURL)
 					timer.Reset(interval)
 				case <-ctx.Done():
 					return
@@ -88,22 +89,22 @@ func SetGuideURL(guideURL string) bool {
 	return true
 }
 
-func StopGuide() {
-	if nil != gGuideCancel {
-		gGuideCancel()
+func (np *NetProxy) StopGuide() {
+	if nil != np.guideCancel {
+		np.guideCancel()
 	}
-	gMutex.Lock()
-	gGuideAddr, gGuideNet = "", ""
-	gMutex.Unlock()
+	np.mutex.Lock()
+	np.guideAddr, np.guideNet = "", ""
+	np.mutex.Unlock()
 }
 
-func SetMaxCompatible(maxCompatible bool) {
-	gMutex.Lock()
-	defer gMutex.Unlock()
-	gMaxCompatible = maxCompatible
+func (np *NetProxy) SetMaxCompatible(maxCompatible bool) {
+	np.mutex.Lock()
+	defer np.mutex.Unlock()
+	np.maxCompat = maxCompatible
 }
 
-func StartHTTPProxy(flags ...bool) string {
+func (np *NetProxy) StartHTTPProxy(flags ...bool) string {
 	var proxyURL *string
 	var proxyLs *net.Listener
 	var network string
@@ -118,17 +119,17 @@ func StartHTTPProxy(flags ...bool) string {
 	}
 
 	if onlyIPv4 {
-		proxyURL = &gProxyURLV4
-		proxyLs = &gListenerV4
+		proxyURL = &np.proxyURLV4
+		proxyLs = &np.listenerV4
 		network = "tcp4"
 	} else {
-		proxyURL = &gProxyURLV6
-		proxyLs = &gListenerV6
+		proxyURL = &np.proxyURLV6
+		proxyLs = &np.listenerV6
 		network = "tcp6"
 	}
 
-	gMutex.Lock()
-	defer gMutex.Unlock()
+	np.mutex.Lock()
+	defer np.mutex.Unlock()
 
 	if "" == *proxyURL {
 		if l, err := net.ListenTCP("tcp4", &net.TCPAddr{
@@ -136,7 +137,7 @@ func StartHTTPProxy(flags ...bool) string {
 		}); nil == err {
 			if addr, ok := l.Addr().(*net.TCPAddr); ok {
 				*proxyLs = l
-				go handleLoop(l, network)
+				go np.handleLoop(l, network)
 				*proxyURL = fmt.Sprintf("http://127.0.0.1:%d/", addr.Port)
 			} else {
 				l.Close()
@@ -150,31 +151,31 @@ func StartHTTPProxy(flags ...bool) string {
 	return *proxyURL
 }
 
-func StopHTTPProxy() {
-	gMutex.Lock()
-	defer gMutex.Unlock()
+func (np *NetProxy) StopHTTPProxy() {
+	np.mutex.Lock()
+	defer np.mutex.Unlock()
 
-	if nil != gListenerV4 {
-		gListenerV4.Close()
-		gListenerV4 = nil
+	if nil != np.listenerV4 {
+		np.listenerV4.Close()
+		np.listenerV4 = nil
 	}
 
-	if nil != gListenerV6 {
-		gListenerV6.Close()
-		gListenerV6 = nil
+	if nil != np.listenerV6 {
+		np.listenerV6.Close()
+		np.listenerV6 = nil
 	}
 
-	gProxyURLV4 = ""
-	gProxyURLV6 = ""
+	np.proxyURLV4 = ""
+	np.proxyURLV6 = ""
 }
 
-func fetchServers(guideURL string) time.Duration {
-	if !atomic.CompareAndSwapUint32(&gFetchFlags, 0x0, 0x1) &&
-		!atomic.CompareAndSwapUint32(&gFetchFlags, 0x2, 0x1) {
+func (np *NetProxy) fetchServers(guideURL string) time.Duration {
+	if !atomic.CompareAndSwapUint32(&np.fetchFlags, 0x0, 0x1) &&
+		!atomic.CompareAndSwapUint32(&np.fetchFlags, 0x2, 0x1) {
 		return 10 * time.Second
 	}
 
-	defer atomic.StoreUint32(&gFetchFlags, 0x0)
+	defer atomic.StoreUint32(&np.fetchFlags, 0x0)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(guideURL)
@@ -207,21 +208,21 @@ func fetchServers(guideURL string) time.Duration {
 	}
 
 	addr := available[rand.Intn(len(available))]
-	gMutex.Lock()
-	gGuideAddr = addr.Address
+	np.mutex.Lock()
+	np.guideAddr = addr.Address
 	switch {
 	default:
 		if addr.OnlyIPv4 != addr.OnlyIPv6 {
 			if addr.OnlyIPv4 {
-				gGuideNet = "tcp4"
+				np.guideNet = "tcp4"
 			} else {
-				gGuideNet = "tcp6"
+				np.guideNet = "tcp6"
 			}
 			break
 		}
-		gGuideNet = "tcp"
+		np.guideNet = "tcp"
 	}
-	gMutex.Unlock()
+	np.mutex.Unlock()
 
 	if 10 <= addr.TTL {
 		return time.Duration(addr.TTL) * time.Second
@@ -229,18 +230,18 @@ func fetchServers(guideURL string) time.Duration {
 	return 10 * time.Second
 }
 
-func getGuideAddr() (string, string) {
-	gMutex.RLock()
-	defer gMutex.RUnlock()
-	return gGuideAddr, gGuideNet
+func (np *NetProxy) getGuideAddr() (string, string) {
+	np.mutex.RLock()
+	defer np.mutex.RUnlock()
+	return np.guideAddr, np.guideNet
 }
 
-func handleLoop(l net.Listener, network string) {
+func (np *NetProxy) handleLoop(l net.Listener, network string) {
 	var m sync.Map
 
 	for {
 		if conn, err := l.Accept(); nil == err {
-			if 0x0 != atomic.LoadUint32(&gFetchFlags) {
+			if 0x0 != atomic.LoadUint32(&np.fetchFlags) {
 				log.Warnf(
 					"[HTTP Proxy(%s)] guide server is being fetched, reject new connection from %s",
 					network,
@@ -250,24 +251,24 @@ func handleLoop(l net.Listener, network string) {
 				continue
 			}
 			m.Store(conn.RemoteAddr().String(), conn)
-			go handleClient(&m, network, conn)
+			go np.handleClient(&m, network, conn)
 		} else {
 			log.Warnf("[HTTP Proxy(%s)] tcp accept failed: %v", network, err)
 			break
 		}
 	}
 
-	gMutex.Lock()
+	np.mutex.Lock()
 
 	if "tcp4" == network {
-		gProxyURLV4 = ""
-		gListenerV4 = nil
+		np.proxyURLV4 = ""
+		np.listenerV4 = nil
 	} else {
-		gProxyURLV6 = ""
-		gListenerV6 = nil
+		np.proxyURLV6 = ""
+		np.listenerV6 = nil
 	}
 
-	gMutex.Unlock()
+	np.mutex.Unlock()
 
 	m.Range(func(_, v any) bool {
 		if c, ok := v.(net.Conn); ok {
@@ -279,7 +280,7 @@ func handleLoop(l net.Listener, network string) {
 	l.Close()
 }
 
-func handleClient(m *sync.Map, network string, c net.Conn) {
+func (np *NetProxy) handleClient(m *sync.Map, network string, c net.Conn) {
 	token := c.RemoteAddr().String()
 
 	defer func() {
@@ -298,16 +299,16 @@ func handleClient(m *sync.Map, network string, c net.Conn) {
 		return
 	}
 
-	if guideAddr, guideNet := getGuideAddr(); guideAddr != "" {
+	if guideAddr, guideNet := np.getGuideAddr(); guideAddr != "" {
 		target = guideAddr
 		if "tcp" != guideNet {
 			network = guideNet
 		} else {
-			gMutex.Lock()
-			if gMaxCompatible {
+			np.mutex.RLock()
+			if np.maxCompat {
 				network = "tcp"
 			}
-			gMutex.Unlock()
+			np.mutex.RUnlock()
 		}
 		log.Infof("[HTTP Proxy(%s)] redirect to guide server: %s", network, target)
 	}

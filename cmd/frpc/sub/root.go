@@ -167,25 +167,26 @@ func startService(
 		defer log.Infof("frpc service for config file [%s] stopped", cfgFile)
 	}
 
+	proxy := NewNetProxy()
 	if "" == cfg.Transport.ProxyURL {
 		if "" != cfg.Transport.GuideURL {
-			if SetGuideURL(cfg.Transport.GuideURL) {
-				defer StopGuide()
+			if proxy.SetGuideURL(cfg.Transport.GuideURL) {
+				defer proxy.StopGuide()
 				cfg.LoginFailExit = lo.ToPtr(false)
 			}
 		}
 		if lo.FromPtr(cfg.Transport.OnlyIPv4) {
-			cfg.Transport.ProxyURL = StartHTTPProxy()
+			cfg.Transport.ProxyURL = proxy.StartHTTPProxy()
 			log.Infof("start frpc service with ipv4 proxy [%s]", cfg.Transport.ProxyURL)
 		} else if lo.FromPtr(cfg.Transport.OnlyIPv6) {
-			cfg.Transport.ProxyURL = StartHTTPProxy(true)
+			cfg.Transport.ProxyURL = proxy.StartHTTPProxy(true)
 			log.Infof("start frpc service with ipv6 proxy [%s]", cfg.Transport.ProxyURL)
 		} else if "" != cfg.Transport.GuideURL {
-			SetMaxCompatible(true)
-			cfg.Transport.ProxyURL = StartHTTPProxy()
+			proxy.SetMaxCompatible(true)
+			cfg.Transport.ProxyURL = proxy.StartHTTPProxy()
 		}
 		if "" != cfg.Transport.ProxyURL {
-			defer StopHTTPProxy()
+			defer proxy.StopHTTPProxy()
 		}
 	}
 
