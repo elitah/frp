@@ -171,8 +171,6 @@ func startService(
 		if "" != cfg.Transport.GuideURL {
 			if SetGuideURL(cfg.Transport.GuideURL) {
 				defer StopGuide()
-				cfg.ServerAddr = "127.0.0.1"
-				cfg.ServerPort = 7000
 				cfg.LoginFailExit = lo.ToPtr(false)
 			}
 		}
