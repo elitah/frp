@@ -121,6 +121,13 @@ type ClientTransportConfig struct {
 	// Note that if the server address resolves to both IPv4 and IPv6 addresses,
 	// setting this value to true may help avoid connection issues in some environments.
 	OnlyIPv6 *bool `json:"onlyIPv6,omitempty"`
+	// GuideURL specifies the URL to fetch a list of available frp servers.
+	// If set, the client will periodically poll this endpoint to retrieve server
+	// addresses in JSON format, test their connectivity, and randomly select one
+	// to redirect HTTP CONNECT proxy traffic through. If no available servers
+	// are found, the proxy falls back to connecting to the original CONNECT target.
+	// If this value is "", the guide feature is disabled.
+	GuideURL string `json:"guideURL,omitempty"`
 	// ProxyURL specifies a proxy address to connect to the server through. If
 	// this value is "", the server will be connected to directly. By default,
 	// this value is read from the "http_proxy" environment variable.
@@ -155,6 +162,8 @@ func (c *ClientTransportConfig) Complete() {
 	c.DialServerTimeout = util.EmptyOr(c.DialServerTimeout, 10)
 	c.DialServerKeepAlive = util.EmptyOr(c.DialServerKeepAlive, 7200)
 	c.OnlyIPv4 = util.EmptyOr(c.OnlyIPv4, lo.ToPtr(false))
+	c.OnlyIPv6 = util.EmptyOr(c.OnlyIPv6, lo.ToPtr(false))
+	c.GuideURL = util.EmptyOr(c.GuideURL, os.Getenv("guide_url"))
 	c.ProxyURL = util.EmptyOr(c.ProxyURL, os.Getenv("http_proxy"))
 	c.PoolCount = util.EmptyOr(c.PoolCount, 1)
 	c.TCPMux = util.EmptyOr(c.TCPMux, lo.ToPtr(true))

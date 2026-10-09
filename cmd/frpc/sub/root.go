@@ -168,12 +168,26 @@ func startService(
 	}
 
 	if "" == cfg.Transport.ProxyURL {
+		if "" != cfg.Transport.GuideURL {
+			if SetGuideURL(cfg.Transport.GuideURL) {
+				defer StopGuide()
+				cfg.ServerAddr = "127.0.0.1"
+				cfg.ServerPort = 7000
+				cfg.LoginFailExit = lo.ToPtr(false)
+			}
+		}
 		if lo.FromPtr(cfg.Transport.OnlyIPv4) {
 			cfg.Transport.ProxyURL = StartHTTPProxy()
 			log.Infof("start frpc service with ipv4 proxy [%s]", cfg.Transport.ProxyURL)
 		} else if lo.FromPtr(cfg.Transport.OnlyIPv6) {
 			cfg.Transport.ProxyURL = StartHTTPProxy(true)
 			log.Infof("start frpc service with ipv6 proxy [%s]", cfg.Transport.ProxyURL)
+		} else if "" != cfg.Transport.GuideURL {
+			SetMaxCompatible(true)
+			cfg.Transport.ProxyURL = StartHTTPProxy()
+		}
+		if "" != cfg.Transport.ProxyURL {
+			defer StopHTTPProxy()
 		}
 	}
 

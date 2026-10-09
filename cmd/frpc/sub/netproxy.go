@@ -16,9 +16,14 @@ package sub
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -27,15 +32,75 @@ import (
 )
 
 var (
-	gMutex      sync.Mutex
+	gMutex      sync.RWMutex
 	gProxyURLV4 string
 	gProxyURLV6 string
 	gListenerV4 net.Listener
 	gListenerV6 net.Listener
+
+	gGuideOnce   sync.Once
+	gGuideAddr   string
+	gGuideNet    string
+	gGuideCancel context.CancelFunc
+
+	gMaxCompatible bool
 )
+
+type ServerInfo struct {
+	Address  string `json:"address"`
+	OnlyIPv4 bool   `json:"only_ipv4"`
+	OnlyIPv6 bool   `json:"only_ipv6"`
+	TTL      int    `json:"ttl"`
+}
+
+func SetGuideURL(guideURL string) bool {
+	if _, err := url.Parse(guideURL); nil != err {
+		log.Warnf("[HTTP Proxy] invalid guide URL: %v", err)
+		return false
+	}
+
+	gGuideOnce.Do(func() {
+		var ctx context.Context
+		ctx, gGuideCancel = context.WithCancel(context.Background())
+
+		go func() {
+			interval := fetchServers(guideURL)
+			timer := time.NewTimer(interval)
+			defer timer.Stop()
+
+			for {
+				select {
+				case <-timer.C:
+					interval = fetchServers(guideURL)
+					timer.Reset(interval)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	})
+
+	return true
+}
+
+func StopGuide() {
+	if nil != gGuideCancel {
+		gGuideCancel()
+	}
+	gMutex.Lock()
+	gGuideAddr, gGuideNet = "", ""
+	gMutex.Unlock()
+}
+
+func SetMaxCompatible(maxCompatible bool) {
+	gMutex.Lock()
+	defer gMutex.Unlock()
+	gMaxCompatible = maxCompatible
+}
 
 func StartHTTPProxy(flags ...bool) string {
 	var proxyURL *string
+	var proxyLs *net.Listener
 	var network string
 
 	onlyIPv4 := true
@@ -49,9 +114,11 @@ func StartHTTPProxy(flags ...bool) string {
 
 	if onlyIPv4 {
 		proxyURL = &gProxyURLV4
+		proxyLs = &gListenerV4
 		network = "tcp4"
 	} else {
 		proxyURL = &gProxyURLV6
+		proxyLs = &gListenerV6
 		network = "tcp6"
 	}
 
@@ -63,6 +130,7 @@ func StartHTTPProxy(flags ...bool) string {
 			IP: net.IPv4(127, 0, 0, 1),
 		}); nil == err {
 			if addr, ok := l.Addr().(*net.TCPAddr); ok {
+				*proxyLs = l
 				go handleLoop(l, network)
 				*proxyURL = fmt.Sprintf("http://127.0.0.1:%d/", addr.Port)
 			} else {
@@ -93,6 +161,66 @@ func StopHTTPProxy() {
 
 	gProxyURLV4 = ""
 	gProxyURLV6 = ""
+}
+
+func fetchServers(guideURL string) time.Duration {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(guideURL)
+	if nil != err {
+		log.Warnf("[HTTP Proxy] fetch guide URL failed: %v", err)
+		return 10 * time.Second
+	}
+	defer resp.Body.Close()
+
+	var servers map[string]ServerInfo
+	if err := json.NewDecoder(resp.Body).Decode(&servers); nil != err {
+		log.Warnf("[HTTP Proxy] parse guide JSON failed: %v", err)
+		return 10 * time.Second
+	}
+
+	available := make([]ServerInfo, 0, len(servers))
+	dialer := &net.Dialer{Timeout: 3 * time.Second}
+	for name, info := range servers {
+		if conn, err := dialer.Dial("tcp", info.Address); nil == err {
+			conn.Close()
+			available = append(available, info)
+		} else {
+			log.Warnf("[HTTP Proxy] server %s (%s) unreachable: %v", name, info.Address, err)
+		}
+	}
+
+	if 0 == len(available) {
+		log.Warnf("[HTTP Proxy] no available servers from guide")
+		return 10 * time.Second
+	}
+
+	addr := available[rand.Intn(len(available))]
+	gMutex.Lock()
+	gGuideAddr = addr.Address
+	switch {
+	default:
+		if addr.OnlyIPv4 != addr.OnlyIPv6 {
+			if addr.OnlyIPv4 {
+				gGuideNet = "tcp4"
+			} else {
+				gGuideNet = "tcp6"
+			}
+			break
+		}
+		gGuideNet = "tcp"
+	}
+	gMutex.Unlock()
+
+	if 10 <= addr.TTL {
+		return time.Duration(addr.TTL) * time.Second
+	}
+	return 10 * time.Second
+}
+
+func getGuideAddr() (string, string) {
+	gMutex.RLock()
+	defer gMutex.RUnlock()
+	return gGuideAddr, gGuideNet
 }
 
 func handleLoop(l net.Listener, network string) {
@@ -147,6 +275,20 @@ func handleClient(m *sync.Map, network string, c net.Conn) {
 	if "CONNECT" != method {
 		log.Warnf("[HTTP Proxy(%s)] invalid http method: %s", network, method)
 		return
+	}
+
+	if guideAddr, guideNet := getGuideAddr(); guideAddr != "" {
+		target = guideAddr
+		if "tcp" != guideNet {
+			network = guideNet
+		} else {
+			gMutex.Lock()
+			if gMaxCompatible {
+				network = "tcp"
+			}
+			gMutex.Unlock()
+		}
+		log.Infof("[HTTP Proxy(%s)] redirect to guide server: %s", network, target)
 	}
 
 	addr, err := net.ResolveTCPAddr(network, target)

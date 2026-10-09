@@ -49,6 +49,7 @@ func Convert_ClientCommonConf_To_v1(conf *ClientCommonConf) *v1.ClientCommonConf
 	out.Transport.ConnectServerLocalIP = conf.ConnectServerLocalIP
 	out.Transport.OnlyIPv4 = lo.ToPtr(conf.OnlyIPv4)
 	out.Transport.OnlyIPv6 = lo.ToPtr(conf.OnlyIPv6)
+	out.Transport.GuideURL = conf.GuideURL
 	out.Transport.ProxyURL = conf.HTTPProxy
 	out.Transport.PoolCount = conf.PoolCount
 	out.Transport.TCPMux = lo.ToPtr(conf.TCPMux)
