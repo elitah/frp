@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatedier/frp/pkg/util/log"
@@ -44,6 +45,8 @@ var (
 	gGuideCancel context.CancelFunc
 
 	gMaxCompatible bool
+
+	gFetchFlags uint32
 )
 
 type ServerInfo struct {
@@ -62,6 +65,8 @@ func SetGuideURL(guideURL string) bool {
 	gGuideOnce.Do(func() {
 		var ctx context.Context
 		ctx, gGuideCancel = context.WithCancel(context.Background())
+
+		atomic.StoreUint32(&gFetchFlags, 0x2)
 
 		go func() {
 			interval := fetchServers(guideURL)
@@ -164,6 +169,13 @@ func StopHTTPProxy() {
 }
 
 func fetchServers(guideURL string) time.Duration {
+	if !atomic.CompareAndSwapUint32(&gFetchFlags, 0x0, 0x1) &&
+		!atomic.CompareAndSwapUint32(&gFetchFlags, 0x2, 0x1) {
+		return 10 * time.Second
+	}
+
+	defer atomic.StoreUint32(&gFetchFlags, 0x0)
+
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(guideURL)
 	if nil != err {
@@ -228,6 +240,15 @@ func handleLoop(l net.Listener, network string) {
 
 	for {
 		if conn, err := l.Accept(); nil == err {
+			if 0x0 != atomic.LoadUint32(&gFetchFlags) {
+				log.Warnf(
+					"[HTTP Proxy(%s)] guide server is being fetched, reject new connection from %s",
+					network,
+					conn.RemoteAddr().String(),
+				)
+				conn.Close()
+				continue
+			}
 			m.Store(conn.RemoteAddr().String(), conn)
 			go handleClient(&m, network, conn)
 		} else {
